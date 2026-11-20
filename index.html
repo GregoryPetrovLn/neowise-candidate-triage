@@ -5,31 +5,121 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Входящие заявки</title>
   <style>
-    body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
-    textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
-    button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
+    :root { color-scheme: light; }
+    body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; color: #1a1a1a; background: #fff; }
+    textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; border: 1px solid #bbb; border-radius: 4px; }
+    button { padding: .4rem .8rem; font: inherit; cursor: pointer; }
+    button[disabled] { cursor: progress; opacity: .6; }
+    .error { color: #a40000; margin: .5rem 0; }
+    .notice { margin: 1rem 0; padding: .75rem 1rem; border-radius: 4px; }
+    .notice-manual { background: #fff4e5; border: 1px solid #f0b357; }
+    .notice-error { background: #fde8e8; border: 1px solid #e07070; }
+    #draft-section { margin-top: 1rem; }
+    .topic { display: inline-block; padding: .1rem .5rem; border-radius: 999px; background: #e8f0fe; color: #1a4fb3; font-size: .9rem; }
+    pre { white-space: pre-wrap; padding: .75rem; border: 1px solid #ddd; border-radius: 4px; background: #fafafa; }
   </style>
 </head>
 <body>
   <h1>Входящие заявки</h1>
-  <form>
+  <form novalidate>
     <label for="message">Текст заявки</label>
-    <textarea id="message" rows="4"></textarea>
-    <button type="submit">Разобрать заявку</button>
+    <textarea id="message" rows="4" required aria-describedby="input-error"></textarea>
+    <p id="input-error" class="error" role="alert" hidden></p>
+    <button type="submit" id="submit">Разобрать заявку</button>
   </form>
-  <pre id="result" aria-live="polite"></pre>
+
+  <section id="status" aria-live="polite"></section>
+
+  <section id="draft-section" hidden>
+    <p>Тема: <span class="topic" id="topic"></span></p>
+    <p><label for="draft">Черновик ответа (проверьте перед отправкой клиенту)</label></p>
+    <pre id="draft"></pre>
+  </section>
+
   <script type="module">
     const form = document.querySelector("form");
-    const result = document.querySelector("#result");
+    const message = document.querySelector("#message");
+    const inputError = document.querySelector("#input-error");
+    const submit = document.querySelector("#submit");
+    const status = document.querySelector("#status");
+    const draftSection = document.querySelector("#draft-section");
+    const topicEl = document.querySelector("#topic");
+    const draftEl = document.querySelector("#draft");
+
+    const TOPIC_LABELS = { delivery: "Доставка", pricing: "Цены", other: "Другое" };
+
+    // Любой новый запрос начинает с чистого листа: старый черновик не должен
+    // пережить сбой и попасть клиенту по ошибке.
+    function clearResult() {
+      status.textContent = "";
+      status.className = "";
+      draftSection.hidden = true;
+      topicEl.textContent = "";
+      draftEl.textContent = "";
+    }
+
+    function showNotice(kind, text) {
+      status.className = `notice notice-${kind}`;
+      status.textContent = text;
+    }
+
+    function showInputError(text) {
+      inputError.textContent = text;
+      inputError.hidden = false;
+      message.setAttribute("aria-invalid", "true");
+      message.focus();
+    }
+
+    function clearInputError() {
+      inputError.textContent = "";
+      inputError.hidden = true;
+      message.removeAttribute("aria-invalid");
+    }
+
+    function render(payload) {
+      if (payload.status === "ready") {
+        topicEl.textContent = TOPIC_LABELS[payload.topic] ?? payload.topic;
+        draftEl.textContent = payload.draft;
+        draftSection.hidden = false;
+        return;
+      }
+      if (payload.status === "manual_review") {
+        showNotice("manual", "Автоматический разбор недоступен. Прочитайте заявку и ответьте клиенту вручную.");
+        return;
+      }
+      if (payload.status === "invalid_input") {
+        showInputError("Введите текст заявки.");
+        return;
+      }
+      showNotice("error", "Сервис временно недоступен. Попробуйте ещё раз или разберите заявку вручную.");
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
-      });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
+      clearInputError();
+      clearResult();
+
+      const text = message.value;
+      if (text.trim() === "") {
+        showInputError("Введите текст заявки.");
+        return;
+      }
+
+      submit.disabled = true;
+      submit.textContent = "Разбираем…";
+      try {
+        const reply = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        render(await reply.json());
+      } catch {
+        render({ status: "network_error" });
+      } finally {
+        submit.disabled = false;
+        submit.textContent = "Разобрать заявку";
+      }
     });
   </script>
 </body>
